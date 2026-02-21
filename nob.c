@@ -9,7 +9,7 @@ int main(int argc, char **argv) {
 
   nob_mkdir_if_not_exists(BUILD_DIR);
   Nob_Cmd cmd = {0};
-  nob_cmd_append(&cmd, "cc", "-g", "-Wall", "-Wextra", "-o",
+  nob_cmd_append(&cmd, "cc", "-g", "-O0", "-Wall", "-Wextra", "-o",
                  BUILD_DIR "/do_something", "do_something.c");
   if (!nob_cmd_run_sync(cmd)) {
     return 1;

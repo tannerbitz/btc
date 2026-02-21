@@ -1,3 +1,4 @@
+#define BTC_IMPLEMENTATION
 #include "btc.h"
 #include <errno.h>
 #include <stdbool.h>
@@ -10,7 +11,31 @@
 
 typedef pid_t Proc;
 
+typedef struct Blah {
+  int a;
+  float b;
+  char c;
+} Blah;
+
 int main(int argc, char **argv) {
+  UNUSED(argc);
+  UNUSED(argv);
+
+  int offset_a = btc_offsetof(Blah, a);
+  int offset_b = btc_offsetof(Blah, b);
+  int offset_c = btc_offsetof(Blah, c);
+  printf("offset a: %d\n", offset_a);
+  printf("offset b: %d\n", offset_b);
+  printf("offset c: %d\n", offset_c);
+  printf("sizeof(void): %zu\n", sizeof(void));
+
+  Arena arena = {0};
+  u8 *buffer = cast(u8 *) malloc(256);
+  arena_init(&arena, buffer, 256);
+
+  Allocator allocator = arena_make_allocator(&arena);
+  Blah *blah = allocator_alloc(&allocator, sizeof(Blah));
+  *blah = (Blah){.a = 1, .b = 2, .c = 'a'};
 
   Proc child = fork();
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 
 #define cast(type) (type)
@@ -27,6 +28,14 @@ typedef double   f64;
 typedef size_t    isize;
 typedef ptrdiff_t usize;
 
+typedef uint8_t b8;
+typedef uint16_t b16;
+typedef uint32_t b32;
+typedef uint64_t b64;
+#include <stdbool.h>
+
+#define btc_offsetof(Type, field) (isize)&((cast(Type*)0)->field)
+
 #ifndef align_of
 #define align_of(Type)                                                         \
   offsetof(                                                                    \
@@ -37,23 +46,159 @@ typedef ptrdiff_t usize;
       member)
 #endif
 
-#define align_pow_2(base_addr, alignment)                                      \
-  (((base_addr) + (alignment) - 1) & (~((alignment) - 1)))
+#include <assert.h>
+
+b8 is_power_of_two(uintptr_t x);
+uintptr_t align_forward(uintptr_t ptr, usize align);
 
 typedef struct {
-  void *(*alloc)(void *context, size_t bytes, size_t alignment);
-  void *(*realloc)(void *context, void *ptr, size_t bytes, size_t alignment);
+  u8 *base;
+  u64 size;
+  u64 prev_offset;
+  u64 curr_offset;
+} Arena;
+
+void* arena_alloc_align(Arena* arena, usize size, usize align);
+void* arena_alloc(Arena* arena, usize size);
+void arena_init(Arena* arena, void* backing_buffer, usize buffer_size);
+void arena_free(Arena* arena, void* ptr);
+void* arena_resize_align(Arena* arena, void* old_memory, usize old_size, usize new_size, usize align);
+void* arena_resize(Arena* arena, void* old_memory, usize old_size, usize new_size);
+void arena_free_all(Arena* arena);
+
+#ifndef DEFAULT_ALIGNMENT
+#define DEFAULT_ALIGNMENT (2*sizeof(void*))
+#endif
+
+typedef struct {
+  void *(*alloc)(void *context, usize bytes, usize alignment);
+  void *(*resize)(void *context, void *ptr, usize old_size, usize new_size, usize alignment);
   void (*free)(void *context, void *ptr);
   void *context;
 } Allocator;
 
-void *allocator_alloc(Allocator *allocator, size_t bytes, size_t alignment) {
+void *allocator_alloc_align(Allocator *allocator, usize bytes, usize alignment);
+void* allocator_alloc(Allocator* allocator, usize bytes);
+void *allocator_resize_align(Allocator *allocator, void *ptr, usize old_size, usize new_size, usize alignment);
+void *allocator_resize(Allocator *allocator, void *ptr, usize old_size, usize new_size);
+void allocator_free(Allocator *allocator, void *ptr);
+
+#define alloc_one(allocator, type)                                             \
+  allocator_alloc(allocator, sizeof(type), align_of(type))
+
+#define alloc_many(allocator, type, number)                                    \
+  allocator_alloc(allocator, sizeof(type) * number, align_of(type))
+
+
+void *arena_alloc_erased(void *arena, usize bytes, usize alignment);
+void *arena_resize_erased(void *arena, void *ptr, usize old_size, usize new_size, usize alignment);
+void arena_free_erased(void *arena, void *ptr);
+Allocator arena_make_allocator(Arena *arena);
+
+typedef struct String {
+  usize len;
+  char* data;
+} String;
+
+#ifdef BTC_IMPLEMENTATION
+b8 is_power_of_two(uintptr_t x) {
+  return (x & (x-1)) == 0;
+}
+
+uintptr_t align_forward(uintptr_t ptr, usize align) {
+  assert(is_power_of_two(align));
+
+  uintptr_t p = ptr;
+  uintptr_t a = cast(uintptr_t)align;
+
+  uintptr_t modulo = p & (a-1);
+
+  if (modulo != 0) {
+    p += (a- modulo);
+  }
+  return p;
+}
+
+void* arena_alloc_align(Arena* arena, usize size, usize align) {
+  uintptr_t curr_ptr = cast(uintptr_t)arena->base + cast(uintptr_t)arena->curr_offset;
+  uintptr_t offset = align_forward(curr_ptr, align);
+  offset -= cast(uintptr_t)arena->base;
+
+  if (offset+size <= arena->size) {
+    arena->prev_offset = offset;
+    arena->curr_offset = offset+size;
+    void* ptr = &arena->base[offset];
+    memset(ptr, 0, size);
+    return ptr;
+  }
+  return NULL;
+}
+
+void* arena_alloc(Arena* arena, usize size) {
+  return arena_alloc_align(arena, size, DEFAULT_ALIGNMENT);
+}
+
+void arena_init(Arena* arena, void* backing_buffer, usize buffer_size) {
+  arena->base = cast(u8*)backing_buffer;
+  arena->curr_offset = 0;
+  arena->prev_offset = 0;
+  arena->size = buffer_size;
+}
+
+void arena_free(Arena* arena, void* ptr) {
+  UNUSED(arena);
+  UNUSED(ptr);
+}
+
+void* arena_resize_align(Arena* arena, void* old_memory, usize old_size, usize new_size, usize align) {
+  u8* old_mem = cast(u8*)old_memory;
+
+  assert(is_power_of_two(align));
+
+  if (old_mem == NULL || old_size == 0) {
+    return arena_alloc_align(arena, new_size, align);
+  } else if (arena->base <= old_mem && old_mem < arena->base+arena->size) {
+    if (arena->base+arena->prev_offset == old_mem) {
+      arena->curr_offset = arena->prev_offset + new_size;
+      if (new_size > old_size) {
+        memset(&arena->base[arena->curr_offset], 0, new_size);
+      }
+      return old_memory;
+    } else {
+      void* new_memory = arena_alloc_align(arena, new_size, align);
+      usize copy_size = old_size < new_size ? old_size : new_size;
+      memmove(new_memory, old_memory, copy_size);
+      return new_memory;
+    }
+  } else {
+    assert(0 && "Memory is out of bounds of the buffer in this arena");
+    return NULL;
+  }
+}
+
+void* arena_resize(Arena* arena, void* old_memory, usize old_size, usize new_size) {
+  return arena_resize_align(arena, old_memory, old_size, new_size, DEFAULT_ALIGNMENT);
+}
+
+void arena_free_all(Arena* arena) {
+  arena->curr_offset = 0;
+  arena->prev_offset = 0;
+}
+
+void *allocator_alloc_align(Allocator *allocator, usize bytes, usize alignment) {
   return allocator->alloc(allocator->context, bytes, alignment);
 }
 
-void *allocator_realloc(Allocator *allocator, void *ptr, size_t bytes,
-                        size_t alignment) {
-  return allocator->realloc(allocator->context, ptr, bytes, alignment);
+void* allocator_alloc(Allocator* allocator, usize bytes) {
+  return allocator_alloc_align(allocator, bytes, DEFAULT_ALIGNMENT);
+}
+
+void *allocator_resize_align(Allocator *allocator, void *ptr, usize old_size, usize new_size, usize alignment) {
+  return allocator->resize(allocator->context, ptr, old_size, new_size, alignment);
+}
+
+void *allocator_resize(Allocator *allocator, void *ptr, usize old_size, usize new_size) {
+  return allocator->resize(allocator->context, ptr, old_size, new_size, DEFAULT_ALIGNMENT);
 }
 
 void allocator_free(Allocator *allocator, void *ptr) {
@@ -66,49 +211,13 @@ void allocator_free(Allocator *allocator, void *ptr) {
 #define alloc_many(allocator, type, number)                                    \
   allocator_alloc(allocator, sizeof(type) * number, align_of(type))
 
-typedef struct {
-  void *base;
-  u64 size;
-  void *pos;
-} Arena;
 
-Arena make_arena() {
-  isize sz = sysconf(_SC_PAGESIZE);
-  Arena arena = {.base = NULL, .pos = NULL, .size = 0};
-  arena.base = malloc(sz);
-  arena.size = sz;
-  arena.pos = arena.base;
-  return arena;
-};
-
-void *arena_alloc(Arena *arena, size_t bytes, size_t alignment) {
-  usize available = arena->base + arena->size - arena->pos;
-  void *start = cast(void *) align_pow_2(cast(u64) arena->pos, alignment);
-  usize alloc_size = (start - arena->pos) + bytes;
-  if (alloc_size > available) {
-    fprintf(stderr, "Out of arena memory!");
-    exit(1);
-  }
-
-  arena->pos += alloc_size;
-  arena->size -= alloc_size;
-  return arena->pos;
-}
-void *arena_realloc(Arena *arena, void *ptr, size_t bytes, size_t alignment) {
-  // unimplemented
-  return NULL;
-}
-void arena_free(Arena *arena, void *ptr) {
-  // no-op
+void *arena_alloc_erased(void *arena, usize bytes, usize alignment) {
+  return arena_alloc_align(cast(Arena *) arena, bytes, alignment);
 }
 
-void *arena_alloc_erased(void *arena, size_t bytes, size_t alignment) {
-  return arena_alloc(cast(Arena *) arena, bytes, alignment);
-}
-
-void *arena_realloc_erased(void *arena, void *ptr, size_t bytes,
-                           size_t alignment) {
-  return arena_realloc(cast(Arena *) arena, ptr, bytes, alignment);
+void *arena_resize_erased(void *arena, void *ptr, usize old_size, usize new_size, usize alignment) {
+  return arena_resize_align(cast(Arena *) arena, ptr, old_size, new_size, alignment);
 }
 
 void arena_free_erased(void *arena, void *ptr) {
@@ -118,11 +227,13 @@ void arena_free_erased(void *arena, void *ptr) {
 Allocator arena_make_allocator(Arena *arena) {
   return (Allocator){
       .alloc = arena_alloc_erased,
-      .realloc = arena_realloc_erased,
+      .resize = arena_resize_erased,
       .free = arena_free_erased,
       .context = cast(void *) arena,
   };
 };
+
+#endif
 
 
 #endif // BTC_H
