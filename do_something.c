@@ -21,17 +21,16 @@ int main(int argc, char **argv) {
   UNUSED(argc);
   UNUSED(argv);
 
-  int offset_a = btc_offsetof(Blah, a);
-  int offset_b = btc_offsetof(Blah, b);
-  int offset_c = btc_offsetof(Blah, c);
+  int offset_a = btc_offset_of(Blah, a);
+  int offset_b = btc_offset_of(Blah, b);
+  int offset_c = btc_offset_of(Blah, c);
   printf("offset a: %d\n", offset_a);
   printf("offset b: %d\n", offset_b);
   printf("offset c: %d\n", offset_c);
   printf("sizeof(void): %zu\n", sizeof(void));
 
   Arena arena = {0};
-  u8 *buffer = cast(u8 *) malloc(256);
-  arena_init(&arena, buffer, 256);
+  arena_init(&arena, 256);
 
   Allocator allocator = arena_make_allocator(&arena);
   Blah *blah = allocator_alloc(&allocator, sizeof(Blah));

@@ -8,6 +8,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <sys/mman.h>
+
 #define cast(type) (type)
 #define UNUSED(arg) cast(void) arg
 
@@ -34,11 +36,11 @@ typedef uint32_t b32;
 typedef uint64_t b64;
 #include <stdbool.h>
 
-#define btc_offsetof(Type, field) (isize)&((cast(Type*)0)->field)
+#define btc_offset_of(Type, field) (isize)&((cast(Type*)0)->field)
 
-#ifndef align_of
-#define align_of(Type)                                                         \
-  offsetof(                                                                    \
+#ifndef btc_align_of
+#define btc_align_of(Type)                                                         \
+  btc_offset_of(                                                                    \
       struct {                                                                 \
         char c;                                                                \
         Type member;                                                           \
@@ -48,19 +50,22 @@ typedef uint64_t b64;
 
 #include <assert.h>
 
+void* os_alloc(usize bytes);
+void os_free(void* buffer, usize size);
+
 b8 is_power_of_two(uintptr_t x);
 uintptr_t align_forward(uintptr_t ptr, usize align);
 
 typedef struct {
   u8 *base;
-  u64 size;
+  u64 capacity;
   u64 prev_offset;
   u64 curr_offset;
 } Arena;
 
 void* arena_alloc_align(Arena* arena, usize size, usize align);
 void* arena_alloc(Arena* arena, usize size);
-void arena_init(Arena* arena, void* backing_buffer, usize buffer_size);
+void arena_init(Arena* arena, usize capacity);
 void arena_free(Arena* arena, void* ptr);
 void* arena_resize_align(Arena* arena, void* old_memory, usize old_size, usize new_size, usize align);
 void* arena_resize(Arena* arena, void* old_memory, usize old_size, usize new_size);
@@ -70,10 +75,14 @@ void arena_free_all(Arena* arena);
 #define DEFAULT_ALIGNMENT (2*sizeof(void*))
 #endif
 
-typedef struct {
+typedef struct Allocator_VTable {
   void *(*alloc)(void *context, usize bytes, usize alignment);
   void *(*resize)(void *context, void *ptr, usize old_size, usize new_size, usize alignment);
   void (*free)(void *context, void *ptr);
+} Allocator_VTable;
+
+typedef struct {
+  const Allocator_VTable* vtable;
   void *context;
 } Allocator;
 
@@ -82,13 +91,6 @@ void* allocator_alloc(Allocator* allocator, usize bytes);
 void *allocator_resize_align(Allocator *allocator, void *ptr, usize old_size, usize new_size, usize alignment);
 void *allocator_resize(Allocator *allocator, void *ptr, usize old_size, usize new_size);
 void allocator_free(Allocator *allocator, void *ptr);
-
-#define alloc_one(allocator, type)                                             \
-  allocator_alloc(allocator, sizeof(type), align_of(type))
-
-#define alloc_many(allocator, type, number)                                    \
-  allocator_alloc(allocator, sizeof(type) * number, align_of(type))
-
 
 void *arena_alloc_erased(void *arena, usize bytes, usize alignment);
 void *arena_resize_erased(void *arena, void *ptr, usize old_size, usize new_size, usize alignment);
@@ -101,6 +103,22 @@ typedef struct String {
 } String;
 
 #ifdef BTC_IMPLEMENTATION
+
+static const Allocator_VTable g_arena_allocator_vtable = cast(Allocator_VTable){
+  .alloc = arena_alloc_erased,
+  .resize = arena_resize_erased,
+  .free = arena_free_erased,
+};
+
+void* os_alloc(usize bytes) {
+  return mmap(NULL, bytes, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
+}
+
+void os_free(void* buffer, usize size) {
+  munmap(buffer, size);
+}
+
+
 b8 is_power_of_two(uintptr_t x) {
   return (x & (x-1)) == 0;
 }
@@ -124,7 +142,7 @@ void* arena_alloc_align(Arena* arena, usize size, usize align) {
   uintptr_t offset = align_forward(curr_ptr, align);
   offset -= cast(uintptr_t)arena->base;
 
-  if (offset+size <= arena->size) {
+  if (offset+size <= arena->capacity) {
     arena->prev_offset = offset;
     arena->curr_offset = offset+size;
     void* ptr = &arena->base[offset];
@@ -138,11 +156,11 @@ void* arena_alloc(Arena* arena, usize size) {
   return arena_alloc_align(arena, size, DEFAULT_ALIGNMENT);
 }
 
-void arena_init(Arena* arena, void* backing_buffer, usize buffer_size) {
-  arena->base = cast(u8*)backing_buffer;
+void arena_init(Arena* arena, usize capacity) {
+  arena->base = cast(u8*)os_alloc(capacity);
   arena->curr_offset = 0;
   arena->prev_offset = 0;
-  arena->size = buffer_size;
+  arena->capacity = capacity;
 }
 
 void arena_free(Arena* arena, void* ptr) {
@@ -157,7 +175,7 @@ void* arena_resize_align(Arena* arena, void* old_memory, usize old_size, usize n
 
   if (old_mem == NULL || old_size == 0) {
     return arena_alloc_align(arena, new_size, align);
-  } else if (arena->base <= old_mem && old_mem < arena->base+arena->size) {
+  } else if (arena->base <= old_mem && old_mem < arena->base+arena->capacity) {
     if (arena->base+arena->prev_offset == old_mem) {
       arena->curr_offset = arena->prev_offset + new_size;
       if (new_size > old_size) {
@@ -186,7 +204,7 @@ void arena_free_all(Arena* arena) {
 }
 
 void *allocator_alloc_align(Allocator *allocator, usize bytes, usize alignment) {
-  return allocator->alloc(allocator->context, bytes, alignment);
+  return allocator->vtable->alloc(allocator->context, bytes, alignment);
 }
 
 void* allocator_alloc(Allocator* allocator, usize bytes) {
@@ -194,22 +212,22 @@ void* allocator_alloc(Allocator* allocator, usize bytes) {
 }
 
 void *allocator_resize_align(Allocator *allocator, void *ptr, usize old_size, usize new_size, usize alignment) {
-  return allocator->resize(allocator->context, ptr, old_size, new_size, alignment);
+  return allocator->vtable->resize(allocator->context, ptr, old_size, new_size, alignment);
 }
 
 void *allocator_resize(Allocator *allocator, void *ptr, usize old_size, usize new_size) {
-  return allocator->resize(allocator->context, ptr, old_size, new_size, DEFAULT_ALIGNMENT);
+  return allocator->vtable->resize(allocator->context, ptr, old_size, new_size, DEFAULT_ALIGNMENT);
 }
 
 void allocator_free(Allocator *allocator, void *ptr) {
-  allocator->free(allocator->context, ptr);
+  allocator->vtable->free(allocator->context, ptr);
 }
 
-#define alloc_one(allocator, type)                                             \
-  allocator_alloc(allocator, sizeof(type), align_of(type))
+#define alloc_one(allocator, Type)                                             \
+  allocator_alloc(allocator, sizeof(Type), align_of(type))
 
-#define alloc_many(allocator, type, number)                                    \
-  allocator_alloc(allocator, sizeof(type) * number, align_of(type))
+#define alloc_many(allocator, Type, number)                                    \
+  allocator_alloc(allocator, sizeof(Type) * number, align_of(type))
 
 
 void *arena_alloc_erased(void *arena, usize bytes, usize alignment) {
@@ -226,10 +244,8 @@ void arena_free_erased(void *arena, void *ptr) {
 
 Allocator arena_make_allocator(Arena *arena) {
   return (Allocator){
-      .alloc = arena_alloc_erased,
-      .resize = arena_resize_erased,
-      .free = arena_free_erased,
-      .context = cast(void *) arena,
+    .vtable = &g_arena_allocator_vtable,
+    .context = cast(void *) arena,
   };
 };
 
