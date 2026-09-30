@@ -102,6 +102,19 @@ typedef struct String {
   char* data;
 } String;
 
+
+#define da_append(da, item, allocator)                          \
+  do {                                                          \
+    if ((da)->len+1 > (da)->capacity) {                         \
+      (da)->capacity = (da)->capacity ? (da)->capacity*2 : 4;   \
+      (da)->items = allocator_resize((allocator),               \
+                      (da)->items,                              \
+                      sizeof(*(da)->items)*(da)->len,           \
+                      sizeof(*(da)->items)*(da)->capacity);     \
+    }                                                           \
+    (da)->items[(da)->len++] = (item);                          \
+  } while(false)
+
 #ifdef BTC_IMPLEMENTATION
 
 static const Allocator_VTable g_arena_allocator_vtable = cast(Allocator_VTable){

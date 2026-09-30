@@ -17,6 +17,27 @@ typedef struct Blah {
   char c;
 } Blah;
 
+typedef struct Ints {
+  int *items;
+  usize len;
+  usize capacity;
+} Ints;
+
+void print_ints(const Ints *ints) {
+  printf("Ints\n");
+  printf("\tlen: %zu\n", ints->len);
+  printf("\tcap: %zu\n", ints->capacity);
+  printf("\titems: [");
+  if (ints->len > 0) {
+    printf("%d", ints->items[0]);
+  }
+
+  for (u64 i = 1; i < ints->len; ++i) {
+    printf(", %d", ints->items[i]);
+  }
+  printf("]\n");
+}
+
 int main(int argc, char **argv) {
   UNUSED(argc);
   UNUSED(argv);
@@ -35,6 +56,16 @@ int main(int argc, char **argv) {
   Allocator allocator = arena_make_allocator(&arena);
   Blah *blah = allocator_alloc(&allocator, sizeof(Blah));
   *blah = (Blah){.a = 1, .b = 2, .c = 'a'};
+
+  Ints ints = {0};
+  da_append(&ints, 2, &allocator);
+  print_ints(&ints);
+  da_append(&ints, 5, &allocator);
+  print_ints(&ints);
+  da_append(&ints, 5, &allocator);
+  da_append(&ints, 5, &allocator);
+  da_append(&ints, 5, &allocator);
+  print_ints(&ints);
 
   Proc child = fork();
 
