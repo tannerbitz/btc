@@ -2,6 +2,7 @@
 #include "btc.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef enum Read_Entire_File_Return {
   Read_Entire_File_Return__SUCCESS,
@@ -101,6 +102,16 @@ void string_hash_table_insert(String_Hash_Table* table, String key) {
   assert(0 && "table completely full");
 }
 
+
+// void qsort(void *base, size_t nmemb, size_t size,
+//       int (*compar)(const void *, const void *));
+int shti_greater_than(const void *a, const void *b) {
+  String_Hash_Table_Item* _a = cast(String_Hash_Table_Item*)a;
+  String_Hash_Table_Item* _b = cast(String_Hash_Table_Item*)b;
+
+  return _a->count < _b->count;
+}
+
 int main(int argc, char **argv) {
 
   Arena arena = {0};
@@ -108,7 +119,7 @@ int main(int argc, char **argv) {
   Allocator allocator = arena_make_allocator(&arena);
 
   String contents = {0};
-  Read_Entire_File_Return rc = read_entire_file("hash_tables.c", &contents, &allocator);
+  Read_Entire_File_Return rc = read_entire_file("btc.h", &contents, &allocator);
   if (Read_Entire_File_Return__SUCCESS != rc) {
     fprintf(stderr, "read_entire_file failed: %d\n", cast(u32)rc);
     return -1;
@@ -116,7 +127,7 @@ int main(int argc, char **argv) {
 
 
   String_Hash_Table ht = {0};
-  u32 buckets = 300;
+  u32 buckets = 1000;
   string_hash_table_init(&ht, buckets, &allocator);
 
   String token = {0};
@@ -138,7 +149,20 @@ int main(int argc, char **argv) {
     }
   }
 
+  String_Hash_Table ht2;
+  string_hash_table_init(&ht2, ht.capacity, &allocator);
+  memcpy(ht2.buckets, ht.buckets, sizeof(*ht.buckets)*ht2.capacity);
+  qsort(ht2.buckets, ht2.capacity, sizeof(*ht2.buckets), shti_greater_than);
 
+  printf("\n\n\n");
+  for (u64 i=0; i<20; ++i) {
+    String_Hash_Table_Item* bucket = &ht2.buckets[i];
+    if (0 == bucket->count) {
+      printf("%d: -\n", cast(u32)i);
+    } else {
+      printf("%d:\tcount: %d\tkey: '%.*s'\n", cast(u32)i, bucket->count, cast(u32)bucket->key.len, bucket->key.data);
+    }
+  }
 
 
   return 0;
