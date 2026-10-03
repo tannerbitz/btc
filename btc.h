@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 
 #include <sys/mman.h>
 
@@ -102,17 +103,92 @@ typedef struct String {
   char* data;
 } String;
 
+#define str(s) cast(String) { .data = cast(char*)s, .len = strlen(s) }
 
-#define da_append(da, item, allocator)                          \
-  do {                                                          \
-    if ((da)->len+1 > (da)->capacity) {                         \
-      (da)->capacity = (da)->capacity ? (da)->capacity*2 : 4;   \
-      (da)->items = allocator_resize((allocator),               \
-                      (da)->items,                              \
-                      sizeof(*(da)->items)*(da)->len,           \
-                      sizeof(*(da)->items)*(da)->capacity);     \
-    }                                                           \
-    (da)->items[(da)->len++] = (item);                          \
+bool string_compare(String a, String b) {
+  if (a.len != b.len) return false;
+
+  for (u64 i=0; i<a.len; ++i) {
+    if (a.data[i] != b.data[i]) return false;
+  }
+  return true;
+}
+
+String str_dupez(String s, Allocator *allocator) {
+  String res = {0};
+  res.len = s.len+1;
+  res.data = allocator_alloc(allocator, res.len+1);
+  memcpy(res.data, s.data, s.len);
+  res.data[s.len] = 0;
+  return res;
+}
+
+char * str_to_cstring(String s, Allocator *allocator) {
+  char *res = allocator_alloc(allocator, s.len+1);
+  memcpy(res, s.data, s.len);
+  res[s.len] = 0;
+  return res;
+};
+
+String str_chop_by_whitespace(String* str) {
+
+  if (0 == str->len) return cast(String){0};
+
+  // find first non-whitespace char
+  u64 i=0;
+  for (; i<str->len; ++i) {
+    if (!isspace(str->data[i])) {
+      break;
+    }
+  }
+  
+  // no non-whitespace character found
+  if (i==str->len) {
+    str->data = NULL;
+    str->len = 0;
+    return cast(String){0};
+  }
+
+  String ret = cast(String){ .data = &str->data[i], .len = 1};
+
+  // find first whitespace character or end of str
+  u64 j=i+1;
+  for (; j<str->len; ++j) {
+    if (!isspace(str->data[j])) {
+      ret.len++;
+    } else {
+      break;
+    }
+  }
+
+  if (j == str->len) {
+    str->data = NULL;
+    str->len = 0;
+  } else {
+    str->data = &str->data[j];
+    str->len = str->len - j;
+  }
+
+  return ret;
+};
+
+#define DA_INIT_CAPACITY 4
+#define da_reserve(da, expected_capacity, allocator)          \
+  do {                                                        \
+    (da)->capacity = ((da)->capacity == 0) ?                  \
+              DA_INIT_CAPACITY : (da)->capacity;              \
+    while ((da)->capacity < (expected_capacity)) {            \
+      (da)->capacity = (da)->capacity * 2;                    \
+    }                                                         \
+    (da)->items = allocator_resize((allocator), (da)->items,  \
+        sizeof(*(da)->items)*((da)->len),                     \
+        sizeof(*(da)->items)*((da)->capacity));               \
+  } while(0)
+
+#define da_append(da, item, allocator)          \
+  do {                                          \
+    da_reserve((da), (da)->len+1, (allocator));  \
+    (da)->items[(da)->len++] = (item);          \
   } while(false)
 
 #ifdef BTC_IMPLEMENTATION

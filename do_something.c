@@ -49,7 +49,6 @@ int main(int argc, char **argv) {
   printf("offset b: %d\n", offset_b);
   printf("offset c: %d\n", offset_c);
   printf("sizeof(void): %zu\n", sizeof(void));
-
   Arena arena = {0};
   arena_init(&arena, 256);
 
