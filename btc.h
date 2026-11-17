@@ -1,17 +1,17 @@
 #ifndef BTC_H
 #define BTC_H
 
+#include <ctype.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <ctype.h>
 
 #include <sys/mman.h>
 
-#define cast(type) (type)
+#define cast(Type) (Type)
 #define UNUSED(arg) cast(void) arg
 
 // clang-format off
@@ -98,6 +98,7 @@ void *arena_resize_erased(void *arena, void *ptr, usize old_size, usize new_size
 void arena_free_erased(void *arena, void *ptr);
 Allocator arena_make_allocator(Arena *arena);
 
+// length based strings
 typedef struct String {
   usize len;
   char* data;
@@ -105,74 +106,17 @@ typedef struct String {
 
 #define str(s) cast(String) { .data = cast(char*)s, .len = strlen(s) }
 
-bool string_compare(String a, String b) {
-  if (a.len != b.len) return false;
+bool string_compare(String a, String b);
+String str_dupez(String s, Allocator *allocator);
+char * str_to_cstring(String s, Allocator *allocator);
+String str_chop_by_whitespace(String* str);
 
-  for (u64 i=0; i<a.len; ++i) {
-    if (a.data[i] != b.data[i]) return false;
-  }
-  return true;
-}
-
-String str_dupez(String s, Allocator *allocator) {
-  String res = {0};
-  res.len = s.len+1;
-  res.data = allocator_alloc(allocator, res.len+1);
-  memcpy(res.data, s.data, s.len);
-  res.data[s.len] = 0;
-  return res;
-}
-
-char * str_to_cstring(String s, Allocator *allocator) {
-  char *res = allocator_alloc(allocator, s.len+1);
-  memcpy(res, s.data, s.len);
-  res[s.len] = 0;
-  return res;
-};
-
-String str_chop_by_whitespace(String* str) {
-
-  if (0 == str->len) return cast(String){0};
-
-  // find first non-whitespace char
-  u64 i=0;
-  for (; i<str->len; ++i) {
-    if (!isspace(str->data[i])) {
-      break;
-    }
-  }
-  
-  // no non-whitespace character found
-  if (i==str->len) {
-    str->data = NULL;
-    str->len = 0;
-    return cast(String){0};
-  }
-
-  String ret = cast(String){ .data = &str->data[i], .len = 1};
-
-  // find first whitespace character or end of str
-  u64 j=i+1;
-  for (; j<str->len; ++j) {
-    if (!isspace(str->data[j])) {
-      ret.len++;
-    } else {
-      break;
-    }
-  }
-
-  if (j == str->len) {
-    str->data = NULL;
-    str->len = 0;
-  } else {
-    str->data = &str->data[j];
-    str->len = str->len - j;
-  }
-
-  return ret;
-};
-
+// dynamic arrays
+#ifndef DA_INIT_CAPACITY
 #define DA_INIT_CAPACITY 4
+#endif // DA_INIT_CAPACITY
+
+#ifndef da_reserve
 #define da_reserve(da, expected_capacity, allocator)          \
   do {                                                        \
     (da)->capacity = ((da)->capacity == 0) ?                  \
@@ -184,12 +128,27 @@ String str_chop_by_whitespace(String* str) {
         sizeof(*(da)->items)*((da)->len),                     \
         sizeof(*(da)->items)*((da)->capacity));               \
   } while(0)
+#endif // da_reserve
 
+#ifndef da_append
 #define da_append(da, item, allocator)          \
   do {                                          \
-    da_reserve((da), (da)->len+1, (allocator));  \
+    da_reserve((da), (da)->len+1, (allocator)); \
     (da)->items[(da)->len++] = (item);          \
   } while(false)
+#endif // da_append
+
+// file operations
+typedef enum Read_Entire_File_Return {
+  Read_Entire_File_Return__SUCCESS,
+  Read_Entire_File_Return__FILE_OPEN_FAILURE,
+  Read_Entire_File_Return__FSEEK_FAILURE,
+  Read_Entire_File_Return__FREAD_FAILURE,
+  Read_Entire_File_Return__ALLOCATION_FAILURE,
+} Read_Entire_File_Return;
+
+Read_Entire_File_Return read_entire_file(const char *filepath, String* contents, Allocator* allocator);
+
 
 #ifdef BTC_IMPLEMENTATION
 
@@ -337,6 +296,116 @@ Allocator arena_make_allocator(Arena *arena) {
     .context = cast(void *) arena,
   };
 };
+
+// String operations
+bool string_compare(String a, String b) {
+  if (a.len != b.len) return false;
+
+  for (u64 i=0; i<a.len; ++i) {
+    if (a.data[i] != b.data[i]) return false;
+  }
+  return true;
+}
+
+String str_dupez(String s, Allocator *allocator) {
+  String res = {0};
+  res.len = s.len+1;
+  res.data = allocator_alloc(allocator, res.len+1);
+  memcpy(res.data, s.data, s.len);
+  res.data[s.len] = 0;
+  return res;
+}
+
+char * str_to_cstring(String s, Allocator *allocator) {
+  char *res = allocator_alloc(allocator, s.len+1);
+  memcpy(res, s.data, s.len);
+  res[s.len] = 0;
+  return res;
+};
+
+String str_chop_by_whitespace(String* str) {
+
+  if (0 == str->len) return cast(String){0};
+
+  // find first non-whitespace char
+  u64 i=0;
+  for (; i<str->len; ++i) {
+    if (!isspace(str->data[i])) {
+      break;
+    }
+  }
+  
+  // no non-whitespace character found
+  if (i==str->len) {
+    str->data = NULL;
+    str->len = 0;
+    return cast(String){0};
+  }
+
+  String ret = cast(String){ .data = &str->data[i], .len = 1};
+
+  // find first whitespace character or end of str
+  u64 j=i+1;
+  for (; j<str->len; ++j) {
+    if (!isspace(str->data[j])) {
+      ret.len++;
+    } else {
+      break;
+    }
+  }
+
+  if (j == str->len) {
+    str->data = NULL;
+    str->len = 0;
+  } else {
+    str->data = &str->data[j];
+    str->len = str->len - j;
+  }
+
+  return ret;
+};
+
+Read_Entire_File_Return read_entire_file(const char *filepath, String* contents, Allocator* allocator) {
+  String tmp = {0};
+
+  FILE *file = fopen(filepath, "r");
+  if (NULL == file) {
+    return Read_Entire_File_Return__FILE_OPEN_FAILURE;
+  }
+  
+  Read_Entire_File_Return rc = Read_Entire_File_Return__SUCCESS;
+  if (0 != fseek(file, 0, SEEK_END)) {
+    rc = Read_Entire_File_Return__FSEEK_FAILURE;
+    goto close_file;
+  }
+  long file_length = ftell(file);
+  if (0 != fseek(file, 0, SEEK_SET)) {
+    rc = Read_Entire_File_Return__FSEEK_FAILURE;
+    goto close_file;
+  }
+
+  tmp.data = allocator_alloc(allocator, cast(u64)file_length);
+  if (NULL == tmp.data) {
+    rc = Read_Entire_File_Return__ALLOCATION_FAILURE;
+    goto close_file;
+  }
+  tmp.len = file_length;
+
+  isize bytes_read = fread(tmp.data, 1, file_length, file);
+  if (bytes_read != file_length) {
+    allocator_free(allocator, tmp.data);
+    rc = Read_Entire_File_Return__FREAD_FAILURE;
+    goto close_file;
+  }
+
+  *contents = tmp;
+
+close_file:
+  fclose(file);
+
+  return rc;
+}
+
 
 #endif
 

@@ -1,0 +1,44 @@
+{
+    "$schema": "https://raw.githubusercontent.com/mfussenegger/dapconfig-schema/master/dapconfig-schema.json",
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            "name": "build_me",
+            "program": "${workspaceFolder}/build_me",
+            "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                {
+                    "description": "Follow the child process instead of the parent after fork",
+                    "text": "set follow-fork-mode child",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Keep both parent and child under GDB's control",
+                    "text": "set detach-on-fork off",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+        {
+            "type": "cppdbg",
+            "request": "launch",
+            "name": "hash_table",
+            "program": "${workspaceFolder}/hash_tables",
+            "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                {
+                    "description": "Follow the child process instead of the parent after fork",
+                    "text": "set follow-fork-mode child",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Keep both parent and child under GDB's control",
+                    "text": "set detach-on-fork off",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

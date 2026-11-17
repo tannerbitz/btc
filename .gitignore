@@ -1,3 +1,9 @@
 build/
 nob
 nob.old
+*.rdi
+do_something
+hash_tables
+json_parser
+build
+
