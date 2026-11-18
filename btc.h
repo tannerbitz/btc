@@ -138,6 +138,15 @@ String str_chop_by_whitespace(String* str);
   } while(false)
 #endif // da_append
 
+#ifndef da_free
+#define da_free(da, allocator)                \
+  do {                                        \
+    allocator_free((allocator), (da)->items); \
+    (da)->len = 0;                            \
+    (da)->capacity = 0;                       \
+  } while(0)
+#endif // da_free
+
 // file operations
 typedef enum Read_Entire_File_Return {
   Read_Entire_File_Return__SUCCESS,

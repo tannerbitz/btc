@@ -335,8 +335,8 @@ bool json_tokenizer_tokenize_string(Json_Tokenizer *tokenizer, Json_Token *token
       *token = cast(Json_Token) {
         .type = JTT_String,
         .content = cast(String) {
-          .data = &tokenizer->content.data[first_char_index],
-          .len = tokenizer->index - first_char_index + 1,
+          .data = &tokenizer->content.data[first_char_index+1],
+          .len = tokenizer->index - (first_char_index+1),
           },
         .line = line,
         .col = col,
@@ -413,7 +413,7 @@ bool json_tokenizer_tokenize_null_value(Json_Tokenizer *tokenizer, Json_Token *t
     if (!string_compare(str("null"), val)) { return false; }
 
     *token = cast(Json_Token) {
-      .type = JTT_False,
+      .type = JTT_Null,
       .content = val,
       .line = tokenizer->line,
       .col = tokenizer->index - tokenizer->last_line_index,
@@ -528,7 +528,7 @@ bool json_tokenizer_next_token(Json_Tokenizer *tokenizer, Json_Token *token) {
 
   if (tokenizer->index >= tokenizer->content.len) {
     *token = json_tokenizer_create_last_token(tokenizer);
-    return false;
+    return true;
   }
 
   Json_Token result = {0};
@@ -596,7 +596,226 @@ bool json_tokenizer_next_token(Json_Tokenizer *tokenizer, Json_Token *token) {
   return success;
 };
 
-// json tokenizer tests
+typedef enum Json_Node_Kind {
+  Json_Node_Kind_Null,
+  Json_Node_Kind_Boolean,
+  Json_Node_Kind_Number,
+  Json_Node_Kind_String,
+  Json_Node_Kind_Array,
+  Json_Node_Kind_Object,
+} Json_Node_Kind;
+
+typedef struct Json_Document Json_Document;
+
+typedef usize Json_Node_Handle;
+#define JSON_INVALID_NODE_HANDLE 0
+
+typedef struct Json_Node Json_Node;
+
+typedef struct Json_Node_Null {
+} Json_Node_Null;
+
+typedef struct Json_Node_Boolean {
+  bool value;
+} Json_Node_Boolean;
+
+typedef struct Json_Node_Number {
+  f64 value;
+} Json_Node_Number;
+
+typedef struct Json_Node_String {
+  String value;
+} Json_Node_String;
+
+typedef struct Json_Node_Array {
+  Json_Node_Handle *items;
+  usize len;
+  usize capacity;
+} Json_Node_Array;
+
+typedef struct Json_Node_Object {
+  String *member_names;
+  Json_Node_Handle *member_values;
+  usize len;
+  usize capacity;
+} Json_Node_Object;
+
+typedef union Json_Node_Value {
+  Json_Node_Null null;
+  Json_Node_Boolean boolean;
+  Json_Node_Number number;
+  Json_Node_String string;
+  Json_Node_Array array;
+  Json_Node_Object object;
+} Json_Node_Value;
+
+typedef struct Json_Node {
+  Json_Node_Kind kind;
+  Json_Node_Value value;
+} Json_Node;
+
+typedef struct Json_Document {
+  Json_Node *items;
+  usize len;
+  usize capacity;
+} Json_Document;
+
+void json_node_set_null(Json_Node *node) {
+  node->kind = Json_Node_Kind_Null;
+  node->value.null = cast(Json_Node_Null){};
+}
+
+void json_node_set_boolean(Json_Node *node, Json_Node_Boolean value) {
+  node->kind = Json_Node_Kind_Boolean;
+  node->value.boolean = value;
+}
+
+void json_node_set_number(Json_Node *node, Json_Node_Number value) {
+  node->kind = Json_Node_Kind_Number;
+  node->value.number = value;
+}
+
+void json_node_set_string(Json_Node *node, Json_Node_String value) {
+  node->kind = Json_Node_Kind_String;
+  node->value.string = value;
+}
+
+void json_node_set_array(Json_Node *node, Json_Node_Array value) {
+  node->kind = Json_Node_Kind_Array;
+  node->value.array = value;
+}
+
+void json_node_set_object(Json_Node *node, Json_Node_Object value) {
+  node->kind = Json_Node_Kind_Object;
+  node->value.object = value;
+}
+
+bool get_json_node(Json_Node_Handle handle, Json_Document *document, Json_Node **node) {
+  if (handle < document->len) {
+    *node = &document->items[handle];
+    return true;
+  }
+  return false;
+}
+
+bool json_node_as_null(Json_Node_Handle handle, Json_Document *document, Json_Node_Null *out) {
+  bool ret = false;
+  Json_Node *node = NULL;
+  if (get_json_node(handle, document, &node)) {
+    if (Json_Node_Kind_Null == node->kind) {
+      ret = true;
+    }
+  }
+  return ret;
+}
+
+typedef struct Json_Tokens {
+  Json_Token *items;
+  usize len;
+  usize capacity;
+} Json_Tokens;
+
+typedef struct Json_Parser {
+  Json_Tokens tokens;
+  usize token_index;
+  Json_Document document;
+  Allocator *allocator;
+} Json_Parser;
+
+Json_Node_Handle json_parse_null_node(Json_Parser *parser) {
+  Json_Token *token = &parser->tokens.items[parser->token_index];
+  assert(JTT_Null == token->type);
+  parser->token_index++;
+
+  Json_Node node;
+  json_node_set_null(&node);
+  da_append(&parser->document, node, parser->allocator);
+
+  return cast(Json_Node_Handle)(parser->document.len - 1);
+}
+
+Json_Node_Handle json_parse_node(Json_Parser *parser) {
+  usize i = 0;
+  Json_Node_Handle handle = JSON_INVALID_NODE_HANDLE;
+
+  Json_Token *token = &parser->tokens.items[i];
+  switch (token->type) {
+    case JTT_Null: {
+      handle = json_parse_null_node(parser);
+    } break;
+    case JTT_EOF:
+    case JTT_Open_Curly:
+    case JTT_Close_Curly:
+    case JTT_Open_Bracket:
+    case JTT_Close_Bracket:
+    case JTT_Comma:
+    case JTT_Colon:
+    case JTT_True:
+    case JTT_False:
+    case JTT_String:
+    case JTT_Number:
+      break;
+  }
+  return handle;
+}
+
+// @brief Parses json string
+//
+// @param[in] allocator: allocator to be used for storage
+// @param[in] json: content to be parsed
+// @param[out] root: handle to root node, only returned on success
+// @return bool: true on success, false on failure
+bool json_parse(Allocator *allocator, String json, Json_Node_Handle *root, Json_Document *document) {
+
+  Json_Node null_node = {0};
+  json_node_set_null(&null_node);
+
+  Json_Parser parser = {0};
+  parser.allocator = allocator;
+  da_append(&parser.document, null_node, allocator);
+  Json_Node_Handle root_node = JSON_INVALID_NODE_HANDLE;
+
+  bool ret = true;
+  usize token_guestimate = (json.len/6) > 0 ? cast(usize)(json.len/6) : 8;
+  da_reserve(&parser.tokens, token_guestimate, allocator);
+
+  Json_Tokenizer tokenizer = make_json_tokenizer(json);
+  bool tokenization_finished = false;
+  while (!tokenization_finished) {
+    if (parser.tokens.len == parser.tokens.capacity) {
+      da_reserve(&parser.tokens, cast(usize)(parser.tokens.len*1.5), allocator);
+    }
+
+    Json_Token *token = &parser.tokens.items[parser.tokens.len++];
+    bool success = json_tokenizer_next_token(&tokenizer, token);
+    if (!success) {
+      ret = false;
+      goto cleanup_tokens;
+    }
+
+    if (JTT_EOF == token->type) {
+      tokenization_finished = true;
+      continue;
+    }
+  }
+
+  root_node = json_parse_node(&parser);
+  if (JSON_INVALID_NODE_HANDLE == root_node) {
+    ret = false;
+    da_free(&parser.document, allocator);
+  }
+
+cleanup_tokens:
+  da_free(&parser.tokens, allocator);
+
+  *root = root_node;
+  *document = parser.document;
+  return ret;
+}
+
+// --------------------------------
+//     JSON TOKENIZER TESTS
+// --------------------------------
 bool json_tokenizer_returns_eof_token_when_content_is_exhausted(
     Test_Case_Context ctx) {
   UNUSED(ctx);
@@ -605,7 +824,7 @@ bool json_tokenizer_returns_eof_token_when_content_is_exhausted(
 
   Json_Token token = {0};
   bool success = json_tokenizer_next_token(&tokenizer, &token);
-  return !success && token.type == JTT_EOF && string_compare(token.content, str(""));
+  return success && token.type == JTT_EOF && string_compare(token.content, str(""));
 }
 
 bool json_tokenizer_returns_open_curly_token(Test_Case_Context ctx) {
@@ -629,7 +848,7 @@ bool json_tokenizer_shifts_contents_after_tokenizing(Test_Case_Context ctx) {
 
   memset(&token, 0, sizeof(token));
   success = json_tokenizer_next_token(&tokenizer, &token);
-  return !success && token.type == JTT_EOF && string_compare(token.content, str(""));
+  return success && token.type == JTT_EOF && string_compare(token.content, str(""));
 }
 
 bool json_tokenizer_tokenizes_strings(Test_Case_Context ctx) {
@@ -642,7 +861,7 @@ bool json_tokenizer_tokenizes_strings(Test_Case_Context ctx) {
 
   return success &&
     token.type == JTT_String &&
-    string_compare(token.content, str("\"the quick brown fox\""));
+    string_compare(token.content, str("the quick brown fox"));
 }
 
 bool json_tokenizer_tokenizes_true(Test_Case_Context ctx) {
@@ -775,8 +994,30 @@ bool json_tokenizer_tokenizes_negative_decimal_scientific_number(Test_Case_Conte
     string_compare(token.content, str("-1.03e4"));
 }
 
+// --------------------------------
+//     JSON TOKENIZER TESTS
+// --------------------------------
+bool json_parser_parses_null(Test_Case_Context ctx) {
+  UNUSED(ctx);
+
+  String content = str("null");
+
+  Arena arena = {0};
+  arena_init(&arena, 10000);
+  Allocator allocator = arena_make_allocator(&arena);
+  Json_Node_Handle root;
+  Json_Document document = {0};
+
+  bool success = json_parse(&allocator, content, &root, &document);
+  Json_Node_Null null_node = {};
+
+  return success &&
+    json_node_as_null(root, &document, &null_node) &&
+    document.len == 2;
+}
+
 #ifndef COMPILE_TESTS
-#define COMPILE_TESTS 0
+#define COMPILE_TESTS 1
 #endif
 #if COMPILE_TESTS
 int main(void) {
@@ -801,6 +1042,7 @@ int main(void) {
   test_suite_register_test(&suite, json_tokenizer_tokenizes_negative_non_decimal_scientific_number, &allocator);
   test_suite_register_test(&suite, json_tokenizer_tokenizes_decimal_scientific_number, &allocator);
   test_suite_register_test(&suite, json_tokenizer_tokenizes_negative_decimal_scientific_number, &allocator);
+  test_suite_register_test(&suite, json_parser_parses_null, &allocator);
 
   // clang-format off
 
